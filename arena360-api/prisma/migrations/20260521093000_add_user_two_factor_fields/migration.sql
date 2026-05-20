@@ -1,0 +1,7 @@
+-- Add missing 2FA columns used by Prisma schema
+ALTER TABLE "User"
+ADD COLUMN IF NOT EXISTS "twoFactorSecret" TEXT;
+
+ALTER TABLE "User"
+ADD COLUMN IF NOT EXISTS "twoFactorEnabled" BOOLEAN NOT NULL DEFAULT false;
+
