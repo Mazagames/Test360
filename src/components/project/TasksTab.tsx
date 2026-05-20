@@ -1,0 +1,343 @@
+import React, { useState } from 'react';
+import { Task, Milestone, ProjectMember, Permission } from '@/types';
+import { PermissionGate } from '../PermissionGate';
+import { Button, Input, Select, Badge, TextArea, Modal } from '../ui/UIComponents';
+import { Plus, List, LayoutGrid, Clock, Trash2, GripVertical } from 'lucide-react';
+import { useTranslation } from 'react-i18next';
+import { CustomFieldsSection } from '../CustomFieldsSection';
+import { useAppDialog } from '../../contexts/DialogContext';
+
+interface TasksTabProps {
+    projectId: string;
+    tasks: Task[];
+    milestones: Milestone[];
+    members: ProjectMember[];
+    onUpsert: (task: Partial<Task>) => void;
+    onDelete: (id: string) => void;
+    onMove: (id: string, status: any) => void;
+    onJoin: () => void;
+    currentUserId: string;
+    defaultFilter?: 'all' | 'my-tasks';
+    canManageTasks?: boolean;
+    canJoinTeam?: boolean;
+}
+
+const KANBAN_COLUMNS = [
+    { id: 'backlog', label: 'backlog', color: 'text-slate-400', border: 'border-slate-700' },
+    { id: 'blocked', label: 'blocked', color: 'text-rose-400', border: 'border-rose-800' },
+    { id: 'todo', label: 'todo', color: 'text-blue-400', border: 'border-blue-800' },
+    { id: 'in_progress', label: 'in_progress', color: 'text-cyan-400', border: 'border-cyan-800' },
+    { id: 'review', label: 'review', color: 'text-[hsl(var(--brand-warning))]', border: 'border-[hsl(var(--brand-warning)/0.35)]' },
+    { id: 'done', label: 'done', color: 'text-[hsl(var(--brand-success))]', border: 'border-[hsl(var(--brand-success)/0.35)]' },
+];
+
+export const TasksTab: React.FC<TasksTabProps> = ({
+    projectId,
+    tasks,
+    milestones,
+    members,
+    onUpsert,
+    onDelete,
+    onMove,
+    onJoin,
+    currentUserId,
+    defaultFilter = 'all',
+    canManageTasks = false,
+    canJoinTeam = false,
+}) => {
+    const { t } = useTranslation();
+    const { confirm } = useAppDialog();
+    const [viewMode, setViewMode] = useState<'list' | 'kanban'>('list');
+    const [filter, setFilter] = useState<'all' | 'my-tasks'>(defaultFilter);
+    const [modalOpen, setModalOpen] = useState(false);
+    const [selectedTask, setSelectedTask] = useState<Partial<Task>>({});
+    const [draggedTaskId, setDraggedTaskId] = useState<string | null>(null);
+    const [dragOverCol, setDragOverCol] = useState<string | null>(null);
+
+    const toDateInput = (d: any) => {
+        if (!d) return '';
+        const s = typeof d === 'string' ? d : new Date(d).toISOString();
+        return s.slice(0, 10);
+    };
+
+    const handleCreate = () => {
+        setSelectedTask({ title: '', status: 'backlog', priority: 'medium', labels: [], dueDate: new Date().toISOString().split('T')[0] });
+        setModalOpen(true);
+    };
+
+    const openEdit = (task: Task) => {
+        setSelectedTask({ ...task, startDate: toDateInput((task as any).startDate), dueDate: toDateInput(task.dueDate) });
+        setModalOpen(true);
+    };
+
+    const handleSave = () => {
+        if (selectedTask.title) { onUpsert(selectedTask); setModalOpen(false); }
+    };
+
+    const handleDeleteConfirm = async (id: string) => {
+        const shouldDelete = await confirm({
+            title: t('delete_task') || 'Delete Task',
+            message: t('confirm_delete_task'),
+            confirmText: t('delete') || 'Delete',
+            cancelText: t('cancel') || 'Cancel',
+            tone: 'danger',
+        });
+        if (!shouldDelete) return;
+        onDelete(id);
+    };
+
+    // ---------- Drag & Drop ----------
+    const handleDragStart = (e: React.DragEvent, taskId: string) => {
+        setDraggedTaskId(taskId);
+        e.dataTransfer.effectAllowed = 'move';
+    };
+
+    const handleDragOver = (e: React.DragEvent, colId: string) => {
+        e.preventDefault();
+        e.dataTransfer.dropEffect = 'move';
+        setDragOverCol(colId);
+    };
+
+    const handleDrop = (e: React.DragEvent, colId: string) => {
+        e.preventDefault();
+        if (draggedTaskId) onMove(draggedTaskId, colId);
+        setDraggedTaskId(null);
+        setDragOverCol(null);
+    };
+
+    const handleDragEnd = () => { setDraggedTaskId(null); setDragOverCol(null); };
+
+    const filteredTasks = filter === 'my-tasks'
+        ? tasks.filter(t => t.assigneeId === currentUserId)
+        : tasks;
+
+    // ---------- Helpers ----------
+    const getStatusColor = (status: string) => {
+        switch (status) {
+            case 'done': return 'success';
+            case 'in_progress': return 'info';
+            case 'review': return 'warning';
+            case 'blocked': return 'danger';
+            case 'todo': return 'neutral';
+            default: return 'neutral';
+        }
+    };
+
+    const priorityDot = (p: string) => {
+        const c = p === 'urgent' ? 'bg-rose-500' : p === 'high' ? 'bg-[hsl(var(--brand-warning))]' : p === 'medium' ? 'bg-blue-500' : 'bg-slate-500';
+        return <span className={`inline-block w-2 h-2 rounded-full ${c} mr-1`} />;
+    };
+
+    return (
+        <div className="space-y-4">
+            {/* Toolbar */}
+            <div className="flex justify-between items-center">
+                <div className="flex bg-slate-800/50 p-1 rounded-lg">
+                    <button onClick={() => setViewMode('list')} className={`p-2 rounded ${viewMode === 'list' ? 'bg-slate-700 text-white' : 'text-slate-400 hover:text-white'}`}>
+                        <List className="w-4 h-4" />
+                    </button>
+                    <button onClick={() => setViewMode('kanban')} className={`p-2 rounded ${viewMode === 'kanban' ? 'bg-slate-700 text-white' : 'text-slate-400 hover:text-white'}`}>
+                        <LayoutGrid className="w-4 h-4" />
+                    </button>
+                </div>
+                <div className="flex bg-slate-800/50 p-1 rounded-lg">
+                    <button onClick={() => setFilter('all')} className={`px-3 py-1 text-xs rounded ${filter === 'all' ? 'bg-slate-700 text-white' : 'text-slate-400 hover:text-white'}`}>
+                        {t('all_tasks')}
+                    </button>
+                    <button onClick={() => setFilter('my-tasks')} className={`px-3 py-1 text-xs rounded ${filter === 'my-tasks' ? 'bg-slate-700 text-white' : 'text-slate-400 hover:text-white'}`}>
+                        {t('my_tasks')}
+                    </button>
+                </div>
+                <div className="flex gap-2">
+                    {canJoinTeam && members.every(m => m.userId !== currentUserId) && (
+                        <Button variant="secondary" size="sm" onClick={onJoin}>{t('join_team')}</Button>
+                    )}
+                    <PermissionGate permission={Permission.MANAGE_TASKS}>
+                        <Button size="sm" onClick={handleCreate}>
+                            <Plus className="w-4 h-4 mr-2" /> {t('create_task')}
+                        </Button>
+                    </PermissionGate>
+                </div>
+            </div>
+
+            {/* LIST VIEW */}
+            {viewMode === 'list' ? (
+                <div className="bg-slate-900/50 rounded-xl border border-slate-800 overflow-hidden">
+                    <table className="w-full text-sm text-left">
+                        <thead className="bg-slate-900 text-slate-400 uppercase font-medium">
+                            <tr>
+                                <th className="p-4">{t('title')}</th>
+                                <th className="p-4">{t('status')}</th>
+                                <th className="p-4">{t('priority')}</th>
+                                <th className="p-4">{t('assignee')}</th>
+                                <th className="p-4">{t('due_date')}</th>
+                                <th className="p-4 text-right">{t('actions')}</th>
+                            </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-800">
+                            {filteredTasks.map(task => (
+                                <tr key={task.id} className="hover:bg-slate-800/30 transition-colors">
+                                    <td className="p-4 font-medium text-white">{task.title}</td>
+                                    <td className="p-4"><Badge variant={getStatusColor(task.status)}>{task.status.replace('_', ' ')}</Badge></td>
+                                    <td className="p-4 text-slate-400 capitalize">{priorityDot(task.priority || '')}{task.priority || '-'}</td>
+                                    <td className="p-4 text-slate-400">{members.find(m => m.userId === task.assigneeId)?.name || t('unassigned')}</td>
+                                    <td className="p-4 text-slate-400">{task.dueDate ? new Date(task.dueDate).toLocaleDateString() : '-'}</td>
+                                    <td className="p-4 text-right">
+                                        {canManageTasks ? (
+                                            <div className="flex justify-end gap-2">
+                                                <button onClick={() => openEdit(task)} className="text-cyan-400 hover:text-cyan-300 text-sm">{t('edit')}</button>
+                                                <button onClick={() => handleDeleteConfirm(task.id)} className="text-rose-400 hover:text-rose-300"><Trash2 className="w-4 h-4" /></button>
+                                            </div>
+                                        ) : null}
+                                    </td>
+                                </tr>
+                            ))}
+                            {tasks.length === 0 && (
+                                <tr><td colSpan={6} className="p-8 text-center text-slate-500">{t('no_tasks_found_create')}</td></tr>
+                            )}
+                        </tbody>
+                    </table>
+                </div>
+            ) : (
+                /* KANBAN VIEW */
+                <div className="flex gap-3 overflow-x-auto pb-4" style={{ minHeight: 500 }}>
+                    {KANBAN_COLUMNS.map(col => {
+                        const colTasks = filteredTasks.filter(t => t.status === col.id);
+                        const isOver = dragOverCol === col.id;
+                        return (
+                            <div
+                                key={col.id}
+                                className={`flex-shrink-0 w-64 rounded-xl border ${col.border} ${isOver ? 'bg-slate-800/60 ring-2 ring-cyan-500/40' : 'bg-slate-900/30'} flex flex-col transition-all`}
+                                onDragOver={e => handleDragOver(e, col.id)}
+                                onDrop={e => handleDrop(e, col.id)}
+                                onDragLeave={() => setDragOverCol(null)}
+                            >
+                                {/* Column Header */}
+                                <div className="p-3 border-b border-slate-800 flex items-center justify-between">
+                                    <h3 className={`font-bold uppercase text-xs tracking-wide ${col.color}`}>{t(col.label)}</h3>
+                                    <span className="bg-slate-800 px-2 py-0.5 rounded-full text-slate-500 text-xs">{colTasks.length}</span>
+                                </div>
+
+                                {/* Cards */}
+                                <div className="flex-1 p-2 space-y-2 overflow-y-auto">
+                                    {colTasks.map(task => (
+                                        <div
+                                            key={task.id}
+                                            draggable={canManageTasks}
+                                            onDragStart={canManageTasks ? e => handleDragStart(e, task.id) : undefined}
+                                            onDragEnd={canManageTasks ? handleDragEnd : undefined}
+                                            onClick={canManageTasks ? () => openEdit(task) : undefined}
+                                            className={`bg-slate-800 p-3 rounded-lg border border-slate-700 ${canManageTasks ? 'hover:border-cyan-500/50 cursor-grab active:cursor-grabbing' : 'cursor-default'} shadow-sm group transition-all ${draggedTaskId === task.id ? 'opacity-40 scale-95' : 'opacity-100'}`}
+                                        >
+                                            <div className="flex items-start justify-between gap-1 mb-2">
+                                                <p className="font-medium text-white text-sm group-hover:text-cyan-400 transition-colors flex-1 min-w-0 truncate">{task.title}</p>
+                                                {canManageTasks ? (
+                                                    <div className="flex items-center gap-1 shrink-0 opacity-0 group-hover:opacity-100 transition-opacity">
+                                                        <GripVertical className="w-3 h-3 text-slate-500" />
+                                                        <button
+                                                            onClick={e => { e.stopPropagation(); handleDeleteConfirm(task.id); }}
+                                                            className="text-slate-500 hover:text-rose-400 transition-colors"
+                                                        >
+                                                            <Trash2 className="w-3 h-3" />
+                                                        </button>
+                                                    </div>
+                                                ) : null}
+                                            </div>
+                                            <div className="flex items-center justify-between text-xs text-slate-500">
+                                                <span className="flex items-center gap-1">
+                                                    {priorityDot(task.priority || '')}
+                                                    <span className="capitalize">{t(task.priority || 'none')}</span>
+                                                </span>
+                                                {task.dueDate && (
+                                                    <span className="flex items-center gap-1">
+                                                        <Clock className="w-3 h-3" />
+                                                        {new Date(task.dueDate).toLocaleDateString()}
+                                                    </span>
+                                                )}
+                                            </div>
+                                            {task.assigneeId && (
+                                                <div className="mt-2 flex items-center gap-1.5">
+                                                    <div className="w-5 h-5 rounded-full bg-cyan-800 flex items-center justify-center text-[9px] text-cyan-200 font-bold">
+                                                        {members.find(m => m.userId === task.assigneeId)?.name?.[0]?.toUpperCase() || '?'}
+                                                    </div>
+                                                    <span className="text-xs text-slate-400 truncate">{members.find(m => m.userId === task.assigneeId)?.name || t('unassigned')}</span>
+                                                </div>
+                                            )}
+                                        </div>
+                                    ))}
+                                    {colTasks.length === 0 && (
+                                        <div className={`h-16 rounded-lg border-2 border-dashed ${isOver ? 'border-cyan-500/60 bg-cyan-500/5' : 'border-slate-700/50'} flex items-center justify-center transition-all`}>
+                                            <p className="text-xs text-slate-600">{canManageTasks ? t('drop_here') : t('no_tasks')}</p>
+                                        </div>
+                                    )}
+                                </div>
+                            </div>
+                        );
+                    })}
+                </div>
+            )}
+
+            {/* Edit / Create Modal */}
+            <Modal isOpen={modalOpen && canManageTasks} onClose={() => setModalOpen(false)} title={selectedTask.id ? t('edit_task') : t('create_task')}>
+                <div className="space-y-4">
+                    <Input name="title" label={t('title')} value={selectedTask.title || ''} onChange={(e: React.ChangeEvent<HTMLInputElement>) => setSelectedTask({ ...selectedTask, title: e.target.value })} required />
+                    <TextArea name="description" label={t('description')} value={selectedTask.description || ''} onChange={(e: React.ChangeEvent<HTMLTextAreaElement>) => setSelectedTask({ ...selectedTask, description: e.target.value })} />
+
+                    <div className="grid grid-cols-2 gap-4">
+                        <Select name="status" label={t('status')} value={selectedTask.status || ''} onChange={(e: React.ChangeEvent<HTMLSelectElement>) => setSelectedTask({ ...selectedTask, status: e.target.value as any })}>
+                            <option value="backlog">{t('backlog')}</option>
+                            <option value="blocked">{t('blocked')}</option>
+                            <option value="todo">{t('todo')}</option>
+                            <option value="in_progress">{t('in_progress')}</option>
+                            <option value="review">{t('review')}</option>
+                            <option value="done">{t('done')}</option>
+                        </Select>
+                        <Select name="priority" label={t('priority')} value={selectedTask.priority || ''} onChange={(e: React.ChangeEvent<HTMLSelectElement>) => setSelectedTask({ ...selectedTask, priority: e.target.value as any })}>
+                            <option value="low">{t('low')}</option>
+                            <option value="medium">{t('medium')}</option>
+                            <option value="high">{t('high')}</option>
+                            <option value="urgent">{t('urgent')}</option>
+                        </Select>
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-4">
+                        <div className="space-y-1">
+                            <Select name="assigneeId" label={t('assignee')} value={selectedTask.assigneeId || ''} onChange={(e: React.ChangeEvent<HTMLSelectElement>) => setSelectedTask({ ...selectedTask, assigneeId: e.target.value })}>
+                                <option value="">{t('unassigned')}</option>
+                                {members.map(m => <option key={m.id} value={m.userId}>{m.name}</option>)}
+                            </Select>
+                        </div>
+                        <Input name="dueDate" type="date" label={t('due_date')} value={selectedTask.dueDate || ''} onChange={(e: React.ChangeEvent<HTMLInputElement>) => setSelectedTask({ ...selectedTask, dueDate: e.target.value })} />
+                    </div>
+
+                    <div className="grid grid-cols-1 gap-4">
+                        <Select name="milestoneId" label={t('milestone')} value={selectedTask.milestoneId || ''} onChange={(e: React.ChangeEvent<HTMLSelectElement>) => setSelectedTask({ ...selectedTask, milestoneId: e.target.value })}>
+                            <option value="">{t('no_milestone')}</option>
+                            {milestones.map(m => (
+                                <option key={m.id} value={m.id}>{m.title}</option>
+                            ))}
+                        </Select>
+                    </div>
+
+                    {selectedTask.id && (
+                        <div className="pt-4 border-t border-slate-700">
+                            <CustomFieldsSection entityType="TASK" entityId={selectedTask.id} onValuesSaved={() => { }} />
+                        </div>
+                    )}
+
+                    <div className="flex justify-between items-center mt-6">
+                        {selectedTask.id && (
+                            <button onClick={() => { handleDeleteConfirm(selectedTask.id!); setModalOpen(false); }} className="flex items-center gap-1 text-rose-400 hover:text-rose-300 text-sm transition-colors">
+                                <Trash2 className="w-4 h-4" /> {t('delete')}
+                            </button>
+                        )}
+                        <div className="flex gap-3 ml-auto">
+                            <Button variant="ghost" onClick={() => setModalOpen(false)}>{t('cancel')}</Button>
+                            <Button onClick={handleSave}>{selectedTask.id ? t('update_task') : t('create_task')}</Button>
+                        </div>
+                    </div>
+                </div>
+            </Modal>
+        </div >
+    );
+};
